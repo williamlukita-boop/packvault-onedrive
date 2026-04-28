@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<title>PackVault — OneDrive</title>
+<link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;600;700&family=Barlow+Condensed:wght@700;900&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #080808; --s1: #0f0f0f; --s2: #161616; --s3: #222;
+  --border: #222; --border2: #333;
+  --green: #00e676; --green-bg: rgba(0,230,118,0.08); --green-border: rgba(0,230,118,0.25);
+  --red: #ff3d57; --red-bg: rgba(255,61,87,0.08); --red-border: rgba(255,61,87,0.3);
+  --yellow: #ffd600; --yellow-bg: rgba(255,214,0,0.08);
+  --blue: #40c4ff;
+  --text: #f0f0f0; --muted2: #555; --muted3: #999;
+  --mono: 'Azeret Mono', monospace;
+  --display: 'Barlow Condensed', sans-serif;
+}
+html, body { height: 100%; overflow: hidden; background: #000; color: var(--text); font-family: var(--mono); }
+
+/* ── Full screen camera ── */
+.cam-wrap { position: fixed; inset: 0; display: flex; flex-direction: column; background: #000; }
+video { width: 100%; flex: 1; min-height: 0; object-fit: cover; display: block; }
+canvas#snap { display: none; }
+
+/* ── Overlays ── */
+.overlay { position: absolute; inset: 0; pointer-events: none; }
+
+.flash { position: absolute; inset: 0; opacity: 0; transition: opacity 0.07s; }
+.flash.g { background: rgba(0,230,118,0.28); }
+.flash.r { background: rgba(255,61,87,0.28); }
+.flash.lit { opacity: 1; }
+
+/* Scan brackets */
+.brackets {
+  position: absolute; top: 38%; left: 50%; transform: translate(-50%, -50%);
+  width: 68vw; max-width: 320px; height: 90px;
+}
+.brackets::before, .brackets::after, .brackets .c1, .brackets .c2 {
+  content: ''; position: absolute; width: 24px; height: 24px; border-style: solid;
+  transition: border-color 0.3s;
+  border-color: rgba(255,255,255,0.4);
+}
+.brackets::before { top:0;left:0;border-width:2px 0 0 2px; }
+.brackets::after  { top:0;right:0;border-width:2px 2px 0 0; }
+.brackets .c1 { bottom:0;left:0;border-width:0 0 2px 2px; }
+.brackets .c2 { bottom:0;right:0;border-width:0 2px 2px 0; }
+.brackets.container-found::before,.brackets.container-found::after,.brackets.container-found .c1,.brackets.container-found .c2 { border-color: var(--green); }
+.brackets.awb-found::before,.brackets.awb-found::after,.brackets.awb-found .c1,.brackets.awb-found .c2 { border-color: var(--blue); }
+
+.scan-line {
+  position: absolute; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
+  top: 50%; opacity: 0;
+}
+.scan-line.on { opacity: 1; animation: sweep 1.8s ease-in-out infinite; }
+@keyframes sweep { 0%{top:5%;opacity:0} 15%{opacity:1} 85%{opacity:1} 100%{top:95%;opacity:0} }
+
+/* ── Top HUD ── */
+.top-hud {
+  position: absolute; top: 0; left: 0; right: 0;
+  padding: 14px 16px 20px;
+  background: linear-gradient(rgba(0,0,0,0.75), transparent);
+  display: flex; justify-content: space-between; align-items: flex-start;
+}
+.brand { font-family: var(--display); font-size: 20px; font-weight: 900; letter-spacing: 2px; color: #fff; }
+.brand em { color: var(--green); font-style: normal; }
+.timer-wrap { text-align: right; }
+.timer { font-family: var(--display); font-size: 30px; font-weight: 900; color: #fff; letter-spacing: 2px; line-height: 1; }
+.rec-badge { font-size: 10px; color: var(--red); letter-spacing: 1px; display: none; margin-top: 2px; }
+.rec-badge span { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--red); animation: blink 1s infinite; margin-right: 4px; vertical-align: middle; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.1} }
+
+/* ── Detected cards (center) ── */
+.detected-area {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 88vw; max-width: 360px;
+  display: flex; flex-direction: column; gap: 10px;
+  pointer-events: none;
+}
+.det-card {
+  border-radius: 10px; padding: 10px 16px;
+  display: flex; align-items: center; gap: 12px;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(0,0,0,0.6);
+  transition: all 0.3s;
+}
+.det-card.found-container { border-color: var(--green-border); background: rgba(0,0,0,0.75); }
+.det-card.found-awb       { border-color: rgba(64,196,255,0.3); background: rgba(0,0,0,0.75); }
+.det-icon { font-size: 20px; flex-shrink: 0; }
+.det-info { min-width: 0; }
+.det-label { font-size: 9px; letter-spacing: 1.5px; color: var(--muted3); text-transform: uppercase; margin-bottom: 2px; }
+.det-value { font-size: 14px; font-weight: 600; color: var(--muted3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.det-card.found-container .det-label { color: var(--green); }
+.det-card.found-container .det-value  { color: #fff; }
+.det-card.found-awb .det-label { color: var(--blue); }
+.det-card.found-awb .det-value  { color: #fff; }
+
+/* ── Status message ── */
+.status-msg {
+  position: absolute; bottom: 52%; left: 50%; transform: translateX(-50%);
+  font-size: 12px; font-weight: 600; letter-spacing: 0.5px;
+  padding: 6px 16px; border-radius: 20px; white-space: nowrap;
+  pointer-events: none; transition: all 0.3s;
+  background: rgba(0,0,0,0.65); color: var(--muted3);
+}
+.status-msg.green { color: var(--green); border: 1px solid var(--green-border); }
+.status-msg.blue  { color: var(--blue); border: 1px solid rgba(64,196,255,0.3); }
+.status-msg.yellow{ color: var(--yellow); border: 1px solid rgba(255,214,0,0.3); }
+
+/* ── Bottom panel ── */
+.bottom-panel {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: linear-gradient(transparent, rgba(0,0,0,0.95) 35%);
+  padding: 24px 16px 28px;
+}
+
+/* Auth button */
+.btn-auth {
+  width: 100%; margin-bottom: 10px;
+  font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: 1px;
+  border: none; border-radius: 10px; cursor: pointer; padding: 12px;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  background: var(--green); color: #000; transition: all 0.15s;
+}
+.btn-auth.in { background: var(--s2); color: var(--muted3); border: 1px solid var(--border2); }
+.btn-auth:active { transform: scale(0.98); }
+
+/* Main action button */
+.btn-main {
+  width: 100%; margin-bottom: 10px;
+  font-family: var(--display); font-size: 22px; font-weight: 900; letter-spacing: 2px;
+  border: none; border-radius: 12px; cursor: pointer; padding: 18px;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  transition: all 0.15s;
+}
+.btn-main:active { transform: scale(0.97); }
+.btn-main:disabled { opacity: 0.3; cursor: not-allowed; }
+.btn-main.start { background: var(--green); color: #000; }
+.btn-main.stop  { background: var(--red); color: #fff; }
+
+/* Bottom row */
+.bottom-row { display: flex; gap: 8px; }
+.btn-sm {
+  flex: 1; font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+  border: 1px solid var(--border2); border-radius: 8px; cursor: pointer; padding: 10px 8px;
+  background: rgba(255,255,255,0.05); color: var(--muted3);
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  transition: all 0.15s;
+}
+.btn-sm:active { transform: scale(0.96); }
+.btn-sm.upload-btn { border-color: rgba(64,196,255,0.3); color: var(--blue); }
+
+/* ── Segments drawer ── */
+.drawer {
+  position: fixed; inset: 0; background: var(--bg);
+  display: none; flex-direction: column; z-index: 50;
+}
+.drawer.open { display: flex; animation: slideUp 0.25s ease; }
+@keyframes slideUp { from{transform:translateY(100%)} to{transform:none} }
+.drawer-head {
+  padding: 18px 16px 14px; display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid var(--border); background: var(--s1); flex-shrink: 0;
+}
+.drawer-head h2 { font-family: var(--display); font-size: 22px; font-weight: 900; }
+.drawer-stats { display: flex; gap: 16px; }
+.ds { text-align: center; }
+.ds-n { font-family: var(--display); font-size: 22px; font-weight: 900; line-height: 1; }
+.ds-n.g{color:var(--green)} .ds-n.b{color:var(--blue)} .ds-n.y{color:var(--yellow)}
+.ds-l { font-size: 9px; color: var(--muted3); letter-spacing: 0.5px; }
+.btn-close { background: var(--s3); border: 1px solid var(--border2); color: var(--muted3); border-radius: 8px; padding: 7px 14px; font-family: var(--mono); font-size: 12px; cursor: pointer; }
+
+.drawer-list { flex: 1; overflow-y: auto; padding: 10px 12px; }
+
+.seg-card {
+  background: var(--s2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px; margin-bottom: 8px; animation: fadeUp 0.2s ease;
+}
+@keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+.seg-card.pending   { }
+.seg-card.uploading { border-color: rgba(64,196,255,0.3); }
+.seg-card.done      { border-color: rgba(0,230,118,0.2); }
+.seg-card.error     { border-color: var(--red-border); background: var(--red-bg); }
+
+.sc-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+.sc-ids { min-width: 0; }
+.sc-container { font-size: 13px; font-weight: 700; color: var(--green); margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-awb { font-size: 12px; color: var(--blue); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-awb.missing { color: var(--red); }
+.sc-status { font-size: 10px; flex-shrink: 0; font-weight: 600; letter-spacing: 0.5px; }
+.sc-status.pending   { color: var(--muted3); }
+.sc-status.uploading { color: var(--blue); }
+.sc-status.done      { color: var(--green); }
+.sc-status.error     { color: var(--red); }
+
+.sc-meta { font-size: 10px; color: var(--muted2); margin-bottom: 8px; }
+.sc-dur  { color: var(--yellow); font-weight: 600; }
+
+.sc-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.sa {
+  font-size: 11px; font-family: var(--mono); border-radius: 6px; padding: 5px 12px;
+  border: 1px solid var(--border2); background: transparent; color: var(--muted3);
+  cursor: pointer; text-decoration: none; display: inline-block; transition: all 0.15s;
+}
+.sa.g { border-color: var(--green-border); color: var(--green); }
+.sa.b { border-color: rgba(64,196,255,0.3); color: var(--blue); }
+
+.prog { height: 3px; background: var(--border); border-radius: 3px; margin-top: 8px; display: none; }
+.prog.on { display: block; }
+.prog-fill { height: 100%; background: var(--blue); border-radius: 3px; width: 0%; transition: width 0.3s; }
+.prog-lbl { font-size: 10px; color: var(--blue); margin-top: 3px; display: none; }
+.prog-lbl.on { display: block; }
+
+.drawer-footer { padding: 12px 14px 20px; border-top: 1px solid var(--border); flex-shrink: 0; display: none; }
+.drawer-footer.on { display: block; }
+.btn-upload-all {
+  width: 100%; background: var(--blue); color: #000;
+  font-family: var(--mono); font-weight: 700; font-size: 12px; letter-spacing: 1px;
+  border: none; border-radius: 8px; padding: 13px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 7px;
+}
+
+/* ── Modals ── */
+.modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.92); display: none; place-items: center; z-index: 100; padding: 20px; }
+.modal-bg.open { display: grid; animation: fadein 0.18s; }
+@keyframes fadein { from{opacity:0} to{opacity:1} }
+.modal { background: var(--s1); border: 1px solid var(--border2); border-radius: 16px; padding: 24px; width: 100%; max-width: 420px; }
+.modal h2 { font-family: var(--display); font-size: 22px; font-weight: 900; margin-bottom: 4px; }
+.modal-sub { font-size: 11px; color: var(--muted3); margin-bottom: 18px; line-height: 1.6; }
+.mf label { display: block; font-size: 10px; color: var(--muted3); letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 6px; }
+.mf input { width: 100%; background: var(--s3); border: 1px solid var(--border2); color: var(--text); font-family: var(--mono); font-size: 14px; font-weight: 600; padding: 12px; border-radius: 8px; outline: none; transition: border-color 0.2s; margin-bottom: 14px; }
+.mf input:focus { border-color: var(--green); }
+.mf .hint { font-size: 10px; color: var(--muted2); margin-top: -10px; margin-bottom: 14px; line-height: 1.5; }
+.modal-acts { display: flex; gap: 8px; }
+.btn-confirm { flex: 1; background: var(--green); color: #000; font-family: var(--mono); font-weight: 700; font-size: 12px; letter-spacing: 1px; border: none; border-radius: 8px; padding: 13px; cursor: pointer; }
+.btn-cancel  { background: var(--s3); color: var(--muted3); font-family: var(--mono); font-size: 12px; border: 1px solid var(--border2); border-radius: 8px; padding: 13px 18px; cursor: pointer; }
+
+/* Toast */
+.toast {
+  position: fixed; bottom: 130px; left: 50%; transform: translateX(-50%) translateY(10px);
+  background: rgba(15,15,15,0.95); border: 1px solid var(--border2); border-radius: 8px;
+  padding: 10px 18px; font-size: 12px; white-space: nowrap;
+  opacity: 0; transition: all 0.22s ease; z-index: 200;
+  backdrop-filter: blur(8px);
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.ok  { border-color: var(--green-border); }
+.toast.err { border-color: var(--red-border); }
+</style>
+</head>
+<body>
+
+<div class="cam-wrap">
+  <video id="camFeed" autoplay muted playsinline></video>
+  <canvas id="snap"></canvas>
+
+  <!-- Overlays -->
+  <div class="overlay">
+    <div class="flash g" id="flashG"></div>
+    <div class="flash r" id="flashR"></div>
+    <div class="flash" style="background:rgba(64,196,255,0.2);" id="flashB"></div>
+
+    <!-- Scan brackets -->
+    <div class="brackets" id="brackets">
+      <div class="c1"></div><div class="c2"></div>
+      <div class="scan-line" id="scanLine"></div>
+    </div>
+
+    <!-- Detected cards — bottom corners -->
+    <div class="det-card" id="cardContainer" style="position:absolute;bottom:130px;left:10px;width:48%;">
+      <div class="det-icon">📦</div>
+      <div class="det-info">
+        <div class="det-label">Container</div>
+        <div class="det-value" id="valContainer">—</div>
+      </div>
+    </div>
+    <div class="det-card" id="cardAwb" style="position:absolute;bottom:130px;right:10px;width:48%;">
+      <div class="det-icon">🚚</div>
+      <div class="det-info">
+        <div class="det-label">AWB</div>
+        <div class="det-value" id="valAwb">—</div>
+      </div>
+    </div>
+
+    <!-- Status message -->
+    <div class="status-msg" id="statusMsg">Sign in to start</div>
+  </div>
+
+  <!-- Top HUD -->
+  <div class="top-hud">
+    <div class="brand">PACK<em>V</em></div>
+    <div class="timer-wrap">
+      <div class="timer" id="timerHud">00:00:00</div>
+      <div class="rec-badge" id="recBadge"><span></span>REC</div>
+    </div>
+  </div>
+
+  <!-- Bottom panel -->
+  <div class="bottom-panel">
+    <button class="btn-auth" id="btnAuth" onclick="handleAuth()">🔷 Sign in with Microsoft</button>
+    <div class="bottom-row">
+      <button class="btn-sm" onclick="openConfig()">⚙ Config</button>
+      <button class="btn-sm upload-btn" onclick="openDrawer()">☁ Recordings</button>
+    </div>
+  </div>
+</div>
+
+<!-- Segments drawer -->
+<div class="drawer" id="drawer">
+  <div class="drawer-head">
+    <div>
+      <h2>Recordings</h2>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div class="drawer-stats">
+        <div class="ds"><div class="ds-n g" id="stTotal">0</div><div class="ds-l">TOTAL</div></div>
+        <div class="ds"><div class="ds-n b" id="stDone">0</div><div class="ds-l">UPLOADED</div></div>
+        <div class="ds"><div class="ds-n y" id="stPending">0</div><div class="ds-l">PENDING</div></div>
+      </div>
+      <button class="btn-close" onclick="closeDrawer()">✕</button>
+    </div>
+  </div>
+  <div class="drawer-list" id="drawerList"></div>
+  <div class="drawer-footer" id="drawerFooter">
+    <button class="btn-upload-all" onclick="uploadAll()">☁ Upload All to OneDrive</button>
+  </div>
+</div>
+
+<!-- Config modal -->
+<div class="modal-bg" id="configModal">
+  <div class="modal">
+    <h2>⚙ Config</h2>
+    <div class="modal-sub">Enter your Azure Client ID.</div>
+    <div class="mf">
+      <label>Azure Client ID</label>
+      <input type="text" id="cfgClientId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+      <div class="hint">Azure Application (Client) ID from portal.azure.com</div>
+      <label>Tenant ID</label>
+      <input type="text" id="cfgTenantId" placeholder="common or your-tenant-id">
+      <div class="hint">Use "common" for personal accounts, or your company Tenant ID</div>
+      <label>Drive Folder Name</label>
+      <input type="text" id="cfgFolderName" value="PackVault - Packing Videos">
+      <label>Station Name</label>
+      <input type="text" id="cfgStation" placeholder="e.g. Station-A">
+    </div>
+    <div class="modal-acts">
+      <button class="btn-confirm" onclick="saveConfig()">✓ SAVE</button>
+      <button class="btn-cancel" onclick="closeConfig()">CANCEL</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><span id="tMsg"></span></div>
+
+<script src="https://unpkg.com/@azure/msal-browser@2.38.0/lib/msal-browser.min.js"></script>
+<script>
+// ─── CONFIG ─────────────────────────────────────────────────────────────────
+let cfg = {
+  clientId:   localStorage.getItem('pv_clientId')   || '',
+  tenantId:   localStorage.getItem('pv_tenantId')   || 'common',
+  folderName: localStorage.getItem('pv_folderName') || 'PackVault - Packing Videos',
+  station:    localStorage.getItem('pv_station')    || ''
+};
+
+// ─── MICROSOFT AUTH ───────────────────────────────────────────────────────────
+let msalInstance = null;
+let accessToken = null;
+let oneDriveFolder = null;
+
+function initMsal() {
+  if (!cfg.clientId) return;
+  msalInstance = new msal.PublicClientApplication({
+    auth: {
+      clientId: cfg.clientId,
+      authority: 'https://login.microsoftonline.com/' + (cfg.tenantId || 'common'),
+      redirectUri: 'https://williamlukita-boop.github.io/packvault-onedrive/'
+    },
+    cache: { cacheLocation: 'localStorage' }
+  });
+}
+
+async function handleAuth() {
+  if (accessToken) {
+    accessToken = null; oneDriveFolder = null;
+    if (msalInstance) msalInstance.clearCache();
+    updateAuthUI(false, null);
+    showToast('Signed out', '');
+    return;
+  }
+  if (!cfg.clientId) { openConfig(); showToast('Set Client ID in Config first', 'err'); return; }
+  
+  // Check MSAL loaded
+  if (typeof msal === 'undefined') {
+    showToast('MSAL library not loaded — check internet connection', 'err');
+    return;
+  }
+  
+  if (!msalInstance) {
+    try { initMsal(); } catch(e) { showToast('MSAL init failed: ' + e.message, 'err'); return; }
+  }
+  
+  showToast('Opening Microsoft login...', '');
+  
+  try {
+    const SCOPES = ['Files.ReadWrite', 'User.Read'];
+    let resp;
+    const accounts = msalInstance.getAllAccounts();
+    if (accounts.length > 0) {
+      try { resp = await msalInstance.acquireTokenSilent({ scopes: SCOPES, account: accounts[0] }); } catch(e) { resp = null; }
+    }
+    if (!resp) {
+      // Always use redirect on mobile
+      await msalInstance.loginRedirect({ scopes: SCOPES });
+      return;
+    }
+    accessToken = resp.accessToken;
+    const u = await graphRequest('https://graph.microsoft.com/v1.0/me');
+    updateAuthUI(true, u);
+    oneDriveFolder = await getOrCreateFolder(cfg.folderName);
+    showToast('\u2713 Signed in as ' + (u.displayName || u.userPrincipalName), 'ok');
+  } catch(e) { 
+    console.error('Auth error:', e);
+    showToast('Error: ' + (e.message || JSON.stringify(e)), 'err'); 
+  }
+}
+
+function updateAuthUI(isIn, user) {
+  const btn = document.getElementById('btnAuth');
+  if (isIn && user) {
+    btn.textContent = '\u2713 ' + (user.displayName || user.userPrincipalName || 'Signed in');
+    btn.classList.add('in');
+    setStatusMsg('Ready \u2014 scan container label to start', '');
+  } else {
+    btn.textContent = '\U0001f537 Sign in with Microsoft';
+    btn.classList.remove('in');
+    setStatusMsg('Sign in to start', '');
+  }
+}
+
+// ─── MICROSOFT GRAPH API ──────────────────────────────────────────────────────
+async function graphRequest(url, options) {
+  options = options || {};
+  if (!accessToken && msalInstance) {
+    const accounts = msalInstance.getAllAccounts();
+    if (accounts.length > 0) {
+      try {
+        const r = await msalInstance.acquireTokenSilent({ scopes: ['Files.ReadWrite','User.Read'], account: accounts[0] });
+        accessToken = r.accessToken;
+      } catch(e) { accessToken = null; updateAuthUI(false,null); throw new Error('Token expired'); }
+    }
+  }
+  const headers = Object.assign({ 'Authorization': 'Bearer ' + accessToken }, options.headers || {});
+  const res = await fetch(url, Object.assign({}, options, { headers }));
+  if (res.status === 401) { accessToken = null; updateAuthUI(false,null); throw new Error('Token expired'); }
+  if (res.status === 204) return {};
+  return res.json();
+}
+
+async function getOrCreateFolder(name) {
+  try {
+    const ex = await graphRequest('https://graph.microsoft.com/v1.0/me/drive/root:/' + encodeURIComponent(name));
+    if (ex && ex.id) return ex;
+  } catch(e) {}
+  try {
+    return await graphRequest('https://graph.microsoft.com/v1.0/me/drive/root/children', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, folder: {}, '@microsoft.graph.conflictBehavior': 'rename' })
+    });
+  } catch(e) { return null; }
+}
+
+async function uploadToDrive(blob, fileName, onProgress) {
+  const mime = blob.type || 'video/mp4';
+
+  // Try method 1: path-based upload (works for personal OneDrive)
+  // Try method 2: folder ID-based upload (works for business/SPO accounts)
+  // Auto-detect which works
+
+  async function tryUpload(url) {
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': mime },
+      body: blob.size < 4 * 1024 * 1024 ? blob : null
+    });
+    return res;
+  }
+
+  if (blob.size < 4 * 1024 * 1024) {
+    // Method 1: personal OneDrive path-based
+    const url1 = 'https://graph.microsoft.com/v1.0/me/drive/root:/'
+      + encodeURIComponent(cfg.folderName) + '/'
+      + encodeURIComponent(fileName) + ':/content';
+
+    let res = await fetch(url1, {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': mime },
+      body: blob
+    });
+
+    // If SPO error, try method 2: folder ID-based (business OneDrive)
+    if (!res.ok) {
+      const errText = await res.text();
+      if (errText.includes('SPO') || errText.includes('SharePoint') || res.status === 400) {
+        // Get folder first
+        if (!oneDriveFolder) oneDriveFolder = await getOrCreateFolder(cfg.folderName);
+        if (oneDriveFolder && oneDriveFolder.id) {
+          const url2 = 'https://graph.microsoft.com/v1.0/me/drive/items/'
+            + oneDriveFolder.id + ':/'
+            + encodeURIComponent(fileName) + ':/content';
+          res = await fetch(url2, {
+            method: 'PUT',
+            headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': mime },
+            body: blob
+          });
+        }
+      }
+      // If still failing, show error
+      if (!res.ok) {
+        const errText2 = await res.text();
+        let errBox = document.getElementById('errBox');
+        if (!errBox) { errBox = document.createElement('div'); errBox.id = 'errBox'; errBox.style.cssText = 'position:fixed;inset:20px;background:#111;border:2px solid #ff3d57;border-radius:12px;z-index:999;padding:16px;display:flex;flex-direction:column;gap:10px;'; document.body.appendChild(errBox); }
+        errBox.innerHTML = '<div style="font-family:monospace;font-size:11px;color:#ff3d57;font-weight:700;">ERROR ' + res.status + '</div><div style="flex:1;overflow-y:auto;font-family:monospace;font-size:11px;color:#eee;white-space:pre-wrap;word-break:break-all;background:#000;padding:10px;border-radius:6px;">' + errText2 + '</div><button onclick="document.getElementById('errBox').remove()" style="background:#ff3d57;color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;cursor:pointer;">✕ Close</button>';
+        throw new Error(res.status + ': ' + errText2.slice(0, 100));
+      }
+    }
+
+    const r = await res.json();
+    if (onProgress) onProgress(100);
+    return { webViewLink: r.webUrl };
+  }
+
+  // For large files use upload session
+  const sessionRes = await fetch(
+    'https://graph.microsoft.com/v1.0/me/drive/items/' + oneDriveFolder.id + ':/' + encodeURIComponent(fileName) + ':/createUploadSession',
+    {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item: { '@microsoft.graph.conflictBehavior': 'rename', 'name': fileName } })
+    }
+  );
+  if (!sessionRes.ok) throw new Error('Upload session failed: ' + sessionRes.status);
+  const session = await sessionRes.json();
+  if (!session.uploadUrl) throw new Error('No upload URL returned');
+
+  const CHUNK = 4 * 1024 * 1024;
+  let offset = 0, webUrl = null;
+  while (offset < blob.size) {
+    const end = Math.min(offset + CHUNK, blob.size);
+    const res = await fetch(session.uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Range': 'bytes ' + offset + '-' + (end-1) + '/' + blob.size, 'Content-Type': blob.type || 'video/mp4' },
+      body: blob.slice(offset, end)
+    });
+    if (res.status === 202) { offset = end; }
+    else if (res.status === 200 || res.status === 201) { const r = await res.json(); webUrl = r.webUrl; offset = blob.size; }
+    else { throw new Error('Chunk failed: ' + res.status); }
+    if (onProgress) onProgress(Math.round((Math.min(offset, blob.size) / blob.size) * 100));
+  }
+  return { webViewLink: webUrl };
+}
+
+// ─── BARCODE PATTERNS ─────────────────────────────────────────────────────────
+function classifyBarcode(raw) {
+  const v = raw.trim();
+
+  // ── AWB patterns — Indonesian couriers ──
+
+  // GoSend / Gojek
+  if (/^GK-/i.test(v)) return 'awb';
+
+  // JNE
+  if (/^(CGK|SUB|BDO|MES|UPG|PLM|BPN|DPS|SOC|JOG)[A-Z0-9]{10,}/i.test(v)) return 'awb';
+
+  // SiCepat (pure numeric, 12-20 digits)
+  if (/^[0-9]{12,20}$/.test(v)) return 'awb';
+
+  // J&T Express
+  if (/^JP[0-9]{10,}/i.test(v)) return 'awb';
+  if (/^JX[0-9]{10,}/i.test(v)) return 'awb';
+
+  // AnterAja
+  if (/^AAJ/i.test(v)) return 'awb';
+
+  // Shopee Xpress
+  if (/^SPX/i.test(v)) return 'awb';
+  if (/^SP[A-Z0-9]{8,}/i.test(v)) return 'awb';
+
+  // Ninja Xpress
+  if (/^NVJ[A-Z0-9]{8,}/i.test(v)) return 'awb';
+  if (/^NVSG[A-Z0-9]{6,}/i.test(v)) return 'awb';
+
+  // Pos Indonesia
+  if (/^(EE|RR|CP|CW)[0-9]{8}ID$/i.test(v)) return 'awb';
+
+  // Lion Parcel
+  if (/^LP[0-9]{10,}/i.test(v)) return 'awb';
+
+  // Wahana
+  if (/^[0-9]{3}-[0-9]{6,}/i.test(v)) return 'awb';
+
+  // TIKI
+  if (/^TIK[0-9]{8,}/i.test(v)) return 'awb';
+  if (/^[0-9]{10}(C|D|E|O|R|S|T|X)$/i.test(v)) return 'awb';
+
+  // ID Express
+  if (/^IDEX[A-Z0-9]{8,}/i.test(v)) return 'awb';
+  if (/^IDE[0-9]{10,}/i.test(v)) return 'awb';
+
+  // Grab Express
+  if (/^GRB[A-Z0-9]{8,}/i.test(v)) return 'awb';
+
+  // Lazada Logistics
+  if (/^LEX[A-Z0-9]{8,}/i.test(v)) return 'awb';
+
+  // Blibli logistics
+  if (/^BLB[A-Z0-9]{8,}/i.test(v)) return 'awb';
+
+  // Generic fallback: long alphanumeric 15+ chars = likely AWB
+  if (/^[A-Z0-9]{15,}$/i.test(v)) return 'awb';
+
+  // ── Anything else = container label ──
+  return 'container';
+}
+
+// ─── CAMERA ───────────────────────────────────────────────────────────────────
+let stream = null;
+async function initCamera() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width:{ideal:1920}, height:{ideal:1080} },
+      audio: true
+    });
+    document.getElementById('camFeed').srcObject = stream;
+  } catch(e) { showToast('Camera error — allow access', 'err'); }
+}
+
+// ─── BARCODE SCANNER ──────────────────────────────────────────────────────────
+let detector = null, scanIv = null;
+let lastSeen = { code: null, ts: 0 };
+const COOLDOWN = 3500;
+
+async function initDetector() {
+  if (!('BarcodeDetector' in window)) return false;
+  try {
+    const fmts = await BarcodeDetector.getSupportedFormats();
+    detector = new BarcodeDetector({ formats: fmts.length ? fmts : ['code_128','code_39','ean_13','ean_8','upc_a','itf'] });
+    return true;
+  } catch { return false; }
+}
+
+function startScan() {
+  const video = document.getElementById('camFeed');
+  const canvas = document.getElementById('snap');
+  const ctx = canvas.getContext('2d');
+  document.getElementById('scanLine').classList.add('on');
+
+  scanIv = setInterval(async () => {
+    if (!detector || !video.videoWidth) return;
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0);
+    try {
+      const codes = await detector.detect(canvas);
+      if (!codes.length) return;
+      const raw = codes[0].rawValue.trim();
+      const now = Date.now();
+      if (raw === lastSeen.code && now - lastSeen.ts < COOLDOWN) return;
+      lastSeen = { code: raw, ts: now };
+      handleBarcode(raw);
+    } catch {}
+  }, 250);
+}
+
+function stopScan() {
+  clearInterval(scanIv);
+  document.getElementById('scanLine').classList.remove('on');
+}
+
+// ─── BARCODE HANDLER ──────────────────────────────────────────────────────────
+let detectedContainer = null;
+let detectedAwb = null;
+
+function handleBarcode(raw) {
+  const type = classifyBarcode(raw);
+
+  // Container scan → START recording
+  if (type === 'container' && !isRecording) {
+    detectedContainer = raw;
+    document.getElementById('valContainer').textContent = raw;
+    document.getElementById('cardContainer').classList.add('found-container');
+    document.getElementById('brackets').classList.add('container-found');
+    doFlash('G');
+    showToast('📦 ' + raw + ' — Recording started', 'ok');
+    startPacking(raw);
+  }
+  // AWB scan → STOP recording
+  else if (type === 'awb' && isRecording && !detectedAwb) {
+    detectedAwb = raw;
+    document.getElementById('valAwb').textContent = raw;
+    document.getElementById('cardAwb').classList.add('found-awb');
+    document.getElementById('brackets').classList.add('awb-found');
+    doFlash('B');
+    showToast('🚚 ' + raw + ' — Recording stopped', 'ok');
+    stopPacking();
+  }
+}
+
+// ─── RECORDING STATE ──────────────────────────────────────────────────────────
+let mediaRecorder = null, recChunks = [];
+let recStart = null, timerIv = null;
+let isRecording = false;
+let segments = [];
+
+let mimeType = ['video/mp4;codecs=h264,aac','video/mp4','video/webm;codecs=vp9','video/webm']
+  .find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+
+async function startPacking(containerId) {
+  if (!stream || !accessToken) { showToast('Sign in first', 'err'); return; }
+
+  // Reset detections
+  detectedContainer = containerId || null;
+  detectedAwb = null;
+  document.getElementById('valContainer').textContent = containerId || 'Waiting for scan…';
+  document.getElementById('valAwb').textContent = 'Waiting for AWB scan…';
+  document.getElementById('cardContainer').className = containerId ? 'det-card found-container' : 'det-card';
+  document.getElementById('cardAwb').className = 'det-card';
+  document.getElementById('brackets').className = containerId ? 'brackets container-found' : 'brackets';
+
+  // Start recording
+  recChunks = [];
+  mediaRecorder = new MediaRecorder(stream, {
+    mimeType,
+    videoBitsPerSecond: 800000,
+    audioBitsPerSecond: 64000
+  });
+  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
+  mediaRecorder.start(500);
+  isRecording = true;
+
+  // Start timer
+  recStart = Date.now();
+  timerIv = setInterval(() => {
+    document.getElementById('timerHud').textContent = fmtMs(Date.now() - recStart);
+  }, 500);
+
+  // UI
+  document.getElementById('recBadge').style.display = 'block';
+  setStatusMsg(containerId ? 'Packing… scan AWB to stop recording' : 'Scan container label to start', containerId ? 'green' : 'yellow');
+}
+
+function stopPacking() {
+  if (!isRecording) return;
+
+  isRecording = false;
+  clearInterval(timerIv);
+
+  mediaRecorder.onstop = () => {
+    const blob = new Blob(recChunks, { type: mimeType });
+    const duration = Date.now() - recStart;
+    segments.push({
+      id: Date.now(),
+      containerId: detectedContainer || '(not scanned)',
+      awbId: detectedAwb || '(not scanned)',
+      duration, blob, status: 'pending', driveLink: null,
+      missingContainer: !detectedContainer,
+      missingAwb: !detectedAwb
+    });
+    updateStats(); updateFooter();
+    showToast('✓ Saved ' + fmtMs(duration), 'ok');
+  };
+  mediaRecorder.stop();
+  mediaRecorder = null;
+
+  // Reset UI for next package
+  document.getElementById('recBadge').style.display = 'none';
+  document.getElementById('timerHud').textContent = '00:00:00';
+  document.getElementById('valContainer').textContent = '—';
+  document.getElementById('valAwb').textContent = '—';
+  document.getElementById('cardContainer').className = 'det-card';
+  document.getElementById('cardAwb').className = 'det-card';
+  document.getElementById('brackets').className = 'brackets';
+  setStatusMsg('Ready — scan container label', '');
+}
+
+
+
+// ─── UPLOAD ───────────────────────────────────────────────────────────────────
+async function uploadOne(segId) {
+  const s = segments.find(x => x.id === segId);
+  if (!s || !accessToken || !s.blob) return;
+  s.status = 'uploading'; renderDrawer();
+
+  try {
+    const ext = s.blob.type.includes('mp4') ? 'mp4' : 'webm';
+    const date = new Date().toISOString().slice(0,10);
+    const station = cfg.station ? '_' + cfg.station : '';
+    const dur = fmtMs(s.duration).replace(/:/g,'-');
+    // OneDrive doesn't allow [ ] * : < > ? / \ | in filenames
+    const safeContainer = s.containerId.replace(/[\[\]\*:<>?\/\\|]/g, '-');
+    const safeAwb = s.awbId.replace(/[\[\]\*:<>?\/\\|]/g, '-');
+    const fileName = safeContainer + '_' + safeAwb + station + '_' + date + '_dur-' + dur + '.' + ext;
+
+    const result = await uploadToDrive(s.blob, fileName, pct => {
+      const f = document.getElementById(`pf-${s.id}`);
+      const l = document.getElementById(`pl-${s.id}`);
+      if (f) { f.closest('.prog').classList.add('on'); f.style.width = pct+'%'; }
+      if (l) { l.classList.add('on'); l.textContent = `Uploading ${pct}%…`; }
+    });
+
+    s.status = 'done'; s.driveLink = result.webViewLink;
+    s.blob = null; // free memory
+    showToast('✓ Uploaded!', 'ok');
+  } catch(e) {
+    s.status = 'error';
+    showToast('✗ ' + e.message, 'err');
+  }
+  renderDrawer(); updateStats(); updateFooter();
+}
+
+async function uploadAll() {
+  const pending = segments.filter(s => s.status==='pending'||s.status==='error');
+  for (const s of pending) { await uploadOne(s.id); await wait(300); }
+}
+
+// ─── DRAWER ───────────────────────────────────────────────────────────────────
+function openDrawer()  { renderDrawer(); document.getElementById('drawer').classList.add('open'); }
+function closeDrawer() { document.getElementById('drawer').classList.remove('open'); }
+
+function renderDrawer() {
+  const list = document.getElementById('drawerList');
+  if (!segments.length) {
+    list.innerHTML = '<div style="text-align:center;padding:50px 20px;color:var(--muted2);font-size:12px;">No recordings yet.<br><br>Tap START PACKING to begin.</div>';
+    return;
+  }
+  const stMap = { pending:'⏳ PENDING', uploading:'↑ UPLOADING', done:'✓ SAVED', error:'✗ ERROR' };
+  list.innerHTML = [...segments].reverse().map(s => `
+    <div class="seg-card ${s.status}">
+      <div class="sc-row">
+        <div class="sc-ids">
+          <div class="sc-container">${s.containerId}</div>
+          <div class="sc-awb ${s.missingAwb?'missing':''}">${s.awbId}</div>
+        </div>
+        <div class="sc-status ${s.status}">${stMap[s.status]}</div>
+      </div>
+      <div class="sc-meta">Duration: <span class="sc-dur">${fmtMs(s.duration)}</span></div>
+      <div class="sc-acts">
+        ${s.status==='pending'          ? `<button class="sa g" onclick="uploadOne(${s.id})">☁ Upload</button>`:''}
+        ${s.status==='error'            ? `<button class="sa g" onclick="uploadOne(${s.id})">↺ Retry</button>`:''}
+        ${s.status==='done'&&s.driveLink? `<a href="${s.driveLink}" target="_blank" class="sa b">🔗 Open in OneDrive</a>`:''}
+        <button class="sa" onclick="copyInfo(${s.id})">📋 Copy</button>
+      </div>
+      <div class="prog" id="prog-${s.id}"><div class="prog-fill" id="pf-${s.id}"></div></div>
+      <div class="prog-lbl" id="pl-${s.id}"></div>
+    </div>`).join('');
+}
+
+function updateStats() {
+  document.getElementById('stTotal').textContent   = segments.length;
+  document.getElementById('stDone').textContent    = segments.filter(s=>s.status==='done').length;
+  document.getElementById('stPending').textContent = segments.filter(s=>s.status==='pending'||s.status==='error').length;
+}
+function updateFooter() {
+  document.getElementById('drawerFooter').classList.toggle('on', segments.some(s=>s.status==='pending'||s.status==='error'));
+}
+
+function copyInfo(segId) {
+  const s = segments.find(x => x.id === segId);
+  if (!s) return;
+  const t = ['=== PACKING VIDEO CLAIM ===',
+    `Container : ${s.containerId}`, `AWB       : ${s.awbId}`,
+    `Station   : ${cfg.station||'—'}`, `Duration  : ${fmtMs(s.duration)}`,
+    `Date      : ${new Date().toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'})}`,
+    `OneDrive  : ${s.driveLink||'Not uploaded yet'}`].join('\n');
+  navigator.clipboard.writeText(t).then(()=>showToast('📋 Copied','ok'));
+}
+
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+function openConfig() {
+  document.getElementById('cfgClientId').value   = cfg.clientId;
+  document.getElementById('cfgTenantId').value   = cfg.tenantId || 'common';
+  document.getElementById('cfgFolderName').value = cfg.folderName;
+  document.getElementById('cfgStation').value    = cfg.station;
+  document.getElementById('configModal').classList.add('open');
+}
+function closeConfig() { document.getElementById('configModal').classList.remove('open'); }
+function saveConfig() {
+  cfg.clientId   = document.getElementById('cfgClientId').value.trim();
+  cfg.tenantId   = document.getElementById('cfgTenantId').value.trim() || 'common';
+  cfg.folderName = document.getElementById('cfgFolderName').value.trim() || 'PackVault - Packing Videos';
+  cfg.station    = document.getElementById('cfgStation').value.trim();
+  localStorage.setItem('pv_clientId',   cfg.clientId);
+  localStorage.setItem('pv_tenantId',   cfg.tenantId);
+  localStorage.setItem('pv_folderName', cfg.folderName);
+  localStorage.setItem('pv_station',    cfg.station);
+  msalInstance = null;
+  closeConfig(); showToast('✓ Config saved', 'ok');
+  if (cfg.clientId) initMsal();
+}
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+function setStatusMsg(msg, type) {
+  const el = document.getElementById('statusMsg');
+  el.textContent = msg;
+  el.className = 'status-msg' + (type ? ' '+type : '');
+}
+function doFlash(c) {
+  const map = {G:'flashG', R:'flashR', B:'flashB'};
+  const el = document.getElementById(map[c]);
+  if (el) { el.classList.add('lit'); setTimeout(()=>el.classList.remove('lit'),120); }
+}
+function fmtMs(ms) {
+  if (!ms&&ms!==0) return '—';
+  const s=Math.floor(Math.abs(ms)/1000);
+  return [Math.floor(s/3600),Math.floor((s%3600)/60),s%60].map(v=>String(v).padStart(2,'0')).join(':');
+}
+function wait(ms) { return new Promise(r=>setTimeout(r,ms)); }
+
+let _tt;
+function showToast(msg, type) {
+  const el=document.getElementById('toast');
+  document.getElementById('tMsg').textContent=msg;
+  el.className='toast show '+(type||'');
+  clearTimeout(_tt); _tt=setTimeout(()=>el.classList.remove('show'),3000);
+}
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+if (!cfg.clientId) setTimeout(openConfig, 800);
+window.addEventListener('load', async function() {
+  if (!cfg.clientId) return;
+  initMsal();
+  // Handle redirect response after Microsoft login redirect
+  try {
+    const resp = await msalInstance.handleRedirectPromise();
+    if (resp && resp.accessToken) {
+      accessToken = resp.accessToken;
+      const u = await graphRequest('https://graph.microsoft.com/v1.0/me');
+      updateAuthUI(true, u);
+      oneDriveFolder = await getOrCreateFolder(cfg.folderName);
+      showToast('\u2713 Signed in as ' + (u.displayName || u.userPrincipalName), 'ok');
+    }
+  } catch(e) { console.error('Redirect handle error:', e); }
+});
+
+// Start barcode scanning immediately
+initCamera().then(function() {
+  initDetector().then(function(ok) {
+    if (ok) startScan();
+  });
+});
+</script>
+</body>
+</html>
